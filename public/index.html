@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/2.1.4/tesseract.min.js"></script>
+    <title>Сетевая игра</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            display: none; /* Скрываем интерфейс до проверки комнаты */
+            align-items: center;
+            width: 100%;
+        }
+        #board {
+            width: 600px;
+            height: 800px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: auto;
+            position: relative;
+        }
+        #gameBoard {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .player {
+    width: 40px; /* Чуть больше */
+    height: 40px; /* Чуть больше */
+    border-radius: 50%;
+    position: absolute;
+    transition: transform 0.3s ease-in-out, top 0.5s ease-in-out, left 0.5s ease-in-out;
+    
+    /* Градиентный эффект для глубины */
+    background: radial-gradient(circle at 30% 30%, white 10%, var(--player-color) 70%, black 100%);
+    
+    /* Блеск и глубина */
+    box-shadow: 
+        0px 3px 6px rgba(0, 0, 0, 0.3), /* Чуть больше тени */
+        inset -4px -4px 8px rgba(0, 0, 0, 0.4), /* Чуть больше внутренней тени */
+        inset 4px 4px 8px rgba(255, 255, 255, 0.4); /* Чуть больше внутреннего света */
+
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-weight: bold;
+    font-size: 16px; /* Чуть больше текст */
+    color: white;
+    text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.8); /* Чуть больше тени текста */
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    
+    /* Плавная тень снизу, создающая эффект парения */
+    filter: drop-shadow(0px 4px 4px rgba(0, 0, 0, 0.4)); /* Чуть больше тени */
+}
+
+/* Световой блик для имитации стекла */
+.player::before {
+    content: "";
+    position: absolute;
+    top: 4px; /* Чуть больше отступ */
+    left: 6px; /* Чуть больше отступ */
+    width: 20px; /* Чуть больше размер */
+    height: 20px; /* Чуть больше размер */
+    background: radial-gradient(circle, rgba(255, 255, 255, 0.8), transparent);
+    border-radius: 50%;
+    opacity: 0.6;
+}
+
+/* Эффект "нажатия" */
+.player:active {
+    transform: scale(0.9);
+    filter: drop-shadow(0px 2px 2px rgba(0, 0, 0, 0.5)); /* Чуть больше тени */
+}
+
+/* Анимация при наведении */
+.player:hover {
+    transform: scale(1.1);
+    transition: transform 0.2s ease-in-out;
+}
+/* Контейнер для кубика */
+.dice {
+            position: absolute;
+            left: calc(50% + 300px + 5rem);
+            top: 50%;
+            transform: translateY(-50%);
+            width: 80px;
+            height: 80px;
+            background: white;
+            border: 2px solid black;
+            border-radius: 10px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 36px;
+            font-weight: bold;
+            cursor: pointer;
+}
+
+        #error-message {
+            color: red;
+            font-size: 20px;
+            text-align: center;
+            margin-top: 20px;
+        }
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .modal {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.3);
+            position: relative;
+            text-align: center;
+            max-width: 60%;
+            max-height: 80%;
+            overflow: auto;
+        }
+        .modal img {
+            max-width: 100%;
+            max-height: 70vh;
+            height: auto;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="board">
+            <img src="/images/board.jpg" id="gameBoard" />
+            <div class="players-container" id="playersContainer"></div>
+        </div>
+        <button id="leave-room" style="position: absolute; top: 10px; right: 10px; padding: 10px 15px; background: red; color: white; border: none; cursor: pointer;">
+            Выйти
+        </button>
+        <div class="dice" onclick="rollDice()">🎲</div>
+    </div>
+    <div id="error-message"></div>
+
+    <script>
+        const socket = io(window.location.origin);
+        let roomId = null;
+        let myPlayerId = null;
+        let players = {};
+        let modalOpen = false;
+        const playerColors = ["red", "blue", "green", "yellow", "purple"];
+        const imagesCover = {
+    "Дорожные знаки": "images/road-signs/cover.jpg",
+    "Члены семьи": "images/family/cover.jpg",
+    "Сказочные персонажи": "images/fairy-tale/cover.jpg",
+    "Известные личности": "images/famous-people/cover.jpg",
+    "Профессии": "images/professions/cover.jpg",
+    "Персонажи из кино и литературы": "images/movies-literature/cover.jpg",
+    "Метафорические образы": "images/metaphors/cover.jpg",
+    "Цитаты известных людей": "images/quotes/cover.jpg",
+    "Цитаты из книг": "images/book-quotes/cover.jpg",
+    "Строки из песен": "images/song-lyrics/cover.jpg",
+    "Устами младенца": "images/kids-sayings/cover.jpg",
+    "Хокку": "images/haiku/cover.jpg",
+    "Проблемы": "images/problems/cover.jpg",
+    "Откат назад": "images/rollback/cover.jpg",
+    "Волшебный грааль": "images/magic-grail/cover.jpg",
+    "Вопросы психотерапевта": "images/therapy-questions/cover.jpg",
+    "Вопросы от эксперта": "images/expert-questions/cover.jpg",
+    "Подсказки": "images/hints/cover.jpg",
+    "Вопросы ребенка": "images/child-questions/cover.jpg",
+    "Провокация": "images/provocation/cover.jpg",
+    "Подсказки тексты": "images/text-hints/cover.jpg",
+    "Таблица чувств": "images/feelings-table/cover.jpg"
+};
+
+        const cells = [
+    { name: "Подсказки", xPercent: 30, yPercent: 82, widthPercent: 9, heightPercent: 11 },
+    { name: "Члены семьи", xPercent: 44, yPercent: 87, widthPercent: 7, heightPercent: 5 },
+    { name: "Сказочные персонажи", xPercent: 51, yPercent: 83, widthPercent: 8, heightPercent: 5 },
+    { name: "Известные личности", xPercent: 60, yPercent: 83, widthPercent: 6, heightPercent: 6 },
+    { name: "Профессии", xPercent: 67.6, yPercent: 81, widthPercent: 6.9, heightPercent: 4.4 },
+    { name: "Персонажи из кино и литературы", xPercent: 76.1, yPercent: 82.5, widthPercent: 8.73, heightPercent: 4.5 },
+    { name: "Метафорические образы", xPercent: 84, yPercent: 79.13, widthPercent: 8.67, heightPercent: 4.75 },
+    { name: "Цитаты известных людей", xPercent: 85, yPercent: 72.6, widthPercent: 6.5, heightPercent: 4.62 },
+    { name: "Дорожные знаки", xPercent: 75, yPercent: 40, widthPercent: 12, heightPercent: 6 },
+    { name: "Цитаты из книг", xPercent: 86.3, yPercent: 64, widthPercent: 6.9, heightPercent: 4.4 },
+    { name: "Строки из песен", xPercent: 77, yPercent: 60.9, widthPercent: 6.2, heightPercent: 4.9 },
+    { name: "Устами младенца", xPercent: 85.8, yPercent: 56.4, widthPercent: 6.2, heightPercent: 4.4 },
+    { name: "Хокку", xPercent: 73, yPercent: 53, widthPercent: 6.5, heightPercent: 4.3 },
+    { name: "Проблемы", xPercent: 81.5, yPercent: 46.4, widthPercent: 8.7, heightPercent: 4.6 },
+    { name: "Откат назад", xPercent: 85.8, yPercent: 40.8, widthPercent: 9.2, heightPercent: 4.6 },
+    { name: "Дорожные знаки", xPercent: 73, yPercent: 41, widthPercent: 8.5, heightPercent: 4.5 },
+    { name: "Волшебный грааль", xPercent: 79.8, yPercent: 35, widthPercent: 8.4, heightPercent: 4.7 },
+    { name: "Метафорические образы", xPercent: 50.6, yPercent: 37.8, widthPercent: 10.07, heightPercent: 4.33 },
+    { name: "Персонажи из кино и литературы", xPercent: 48.5, yPercent: 42.5, widthPercent: 8.5, heightPercent: 5.13 },
+    { name: "Профессии", xPercent: 39, yPercent: 44.25, widthPercent: 7.7, heightPercent: 4 },
+    { name: "Известные личности", xPercent: 30.17, yPercent: 46.13, widthPercent: 8.16, heightPercent: 4.5 },
+    { name: "Сказочные персонажи", xPercent: 31.83, yPercent: 40.5, widthPercent: 7.67, heightPercent: 3.75 },
+    { name: "Члены семьи", xPercent: 23.6, yPercent: 41.13, widthPercent: 7.73, heightPercent: 4.12 },
+    { name: "Вопросы психотерапевта", xPercent: 18.5, yPercent: 31.62, widthPercent: 8.17, heightPercent: 4.63 },
+    { name: "Вопросы от эксперта", xPercent: 12.33, yPercent: 25.75, widthPercent: 7.67, heightPercent: 4.25 },
+    { name: "Подсказки", xPercent: 30.5, yPercent: 20, widthPercent: 7.83, heightPercent: 4.38 },
+    { name: "Откат назад", xPercent: 18.67, yPercent: 19.25, widthPercent: 8, heightPercent: 4.25 },
+    { name: "Вопросы ребенка", xPercent: 7.67, yPercent: 19.63, widthPercent: 7.66, heightPercent: 4.62 },
+    { name: "Провокация", xPercent: 58, yPercent: 6, widthPercent: 11.17, heightPercent: 12.25 },
+    { name: "Любая карта", xPercent: 74, yPercent: 27.75, widthPercent: 8.33, heightPercent: 4.38 },
+    { name: "Подсказки тексты", xPercent: 67.67, yPercent: 35.13, widthPercent: 8.83, heightPercent: 4.12 },
+    { name: "Таблица чувств", xPercent: 4, yPercent: 38.38, widthPercent: 13.7, heightPercent: 9.62 },
+];
+
+        // Получаем roomId из URL
+        const urlParams = new URLSearchParams(window.location.search);
+        roomId = urlParams.get("roomId");
+
+        // Проверяем, существует ли комната
+        async function checkRoomExists(roomId) {
+            try {
+                const response = await fetch(`/check-room?roomId=${roomId}`);
+                if (!response.ok) {
+                    throw new Error("Ошибка сети");
+                }
+                const data = await response.json();
+                return data.exists;
+            } catch (error) {
+                console.error("Ошибка при проверке комнаты:", error);
+                return false;
+            }
+        }
+
+        // Основная функция инициализации
+        async function initializeGame() {
+            if (!roomId) {
+                document.getElementById("error-message").innerText = "Код комнаты не указан в URL.";
+                return;
+            }
+
+            const roomExists = await checkRoomExists(roomId);
+            if (!roomExists) {
+                document.getElementById("error-message").innerText = "Комната не найдена. Пожалуйста, проверьте код комнаты.";
+                return;
+            }
+
+            // Если комната существует, показываем интерфейс и подключаемся
+            document.getElementById("game-container").style.display = "flex";
+            socket.emit("joinRoom", roomId);
+        }
+
+        // Запускаем инициализацию при загрузке страницы
+        initializeGame();
+
+        // Обработка ошибок подключения
+        socket.on("roomNotFound", ({ message }) => {
+            document.getElementById("error-message").innerText = message;
+        });
+
+        socket.on("roomFull", ({ message }) => {
+            document.getElementById("error-message").innerText = message;
+        });
+
+        // Обработка отключения от сервера
+        socket.on("disconnect", () => {
+            document.getElementById("error-message").innerText = "Соединение с сервером потеряно. Пожалуйста, перезагрузите страницу.";
+        });
+
+        // Обновление игроков
+        socket.on("updatePlayers", (serverPlayers) => {
+            console.log('update playesrs')
+    document.querySelectorAll(".player").forEach(el => el.remove());
+    players = {};
+
+    let gameBoard = document.getElementById("gameBoard");
+
+    serverPlayers.forEach((player, index) => {
+        let playerDiv = document.createElement("div");
+        playerDiv.classList.add("player");
+        playerDiv.style.backgroundColor = playerColors[index % playerColors.length];
+
+        document.getElementById("board").appendChild(playerDiv); // Добавляем в DOM, чтобы получить размеры
+
+        // Получаем размеры фишки
+        let playerSize = playerDiv.offsetWidth || 30; // Фишка ещё не добавлена в DOM, ставим 30px по умолчанию
+        let boardRect = gameBoard.getBoundingClientRect();
+
+        // Корректируем позицию с учётом размеров фишки
+        let left = (player.position.xPercent / 100) * boardRect.width - (playerSize / 2);
+        let top = (player.position.yPercent / 100) * boardRect.height - (playerSize / 2);
+
+        playerDiv.style.left = `${left}px`;
+        playerDiv.style.top = `${top}px`;
+
+        playerDiv.dataset.id = player.id;
+        players[player.id] = playerDiv;
+
+        if (player.id === socket.id) {
+            myPlayerId = player.id;
+            playerDiv.id = "myPlayer";
+        }
+    });
+});
+        // Перемещение игрока
+        let lastPosition = { xPercent: null, yPercent: null }; // Храним последнюю позицию игрока
+
+document.addEventListener("click", (event) => {
+    if (event.target.classList.contains("dice")) return;
+    if (modalOpen) return;
+    if (event.target.classList.contains("modal-overlay")) return; // Проверка клика по модалке
+    if (event.target.classList.contains("player")) return; // Проверка клика по фишке
+
+    let boardRect = document.getElementById("gameBoard").getBoundingClientRect();
+    let xPercent = ((event.clientX - boardRect.left) / boardRect.width) * 100;
+    let yPercent = ((event.clientY - boardRect.top) / boardRect.height) * 100;
+
+    // Проверяем, изменилась ли позиция
+    if (lastPosition.xPercent === xPercent && lastPosition.yPercent === yPercent) {
+        return; // Выходим из функции, если координаты не изменились
+    }
+
+    // Обновляем сохранённую позицию
+    lastPosition.xPercent = xPercent;
+    lastPosition.yPercent = yPercent;
+
+    socket.emit("movePlayer", { roomId, xPercent, yPercent });
+});
+
+
+        // Открытие модального окна
+        document.addEventListener("dblclick", (event) => {
+            const gameBoard = event.target.getBoundingClientRect(); // Получаем размеры поля
+
+const xPercent = ((event.offsetX / gameBoard.width) * 100).toFixed(2);
+const yPercent = ((event.offsetY / gameBoard.height) * 100).toFixed(2);
+
+            if (myPlayerId) {
+                let category = getCellAtClick(event.clientX, event.clientY);
+                if (category) {
+                    showModalWithImage(category);
+                }
+            }
+        });
+
+        document.getElementById("leave-room").addEventListener("click", () => {
+            if (!roomId || !myPlayerId) return;
+
+            // Уведомляем сервер, что игрок выходит
+            socket.emit("leaveRoom", { roomId, playerId: myPlayerId });
+
+            // Очищаем данные о комнате
+            roomId = null;
+            myPlayerId = null;
+            players = {};
+
+            // Отключаем сокет
+            socket.disconnect();
+
+            // Перенаправляем на главную страницу или перезагружаем
+            window.location.href = "/"; // Можно заменить на window.location.reload();
+        });
+
+
+        // Получение ячейки по клику
+        function getCellAtClick(x, y) {
+            let gameBoard = document.getElementById("gameBoard");
+            let boardRect = gameBoard.getBoundingClientRect();
+            let xPercent = ((x - boardRect.left) / boardRect.width) * 100;
+            let yPercent = ((y - boardRect.top) / boardRect.height) * 100;
+
+            return cells.find(cell =>
+                xPercent >= cell.xPercent && xPercent <= cell.xPercent + cell.widthPercent &&
+                yPercent >= cell.yPercent && yPercent <= cell.yPercent + cell.heightPercent
+            )?.name || null;
+        }
+
+        // Показ модального окна с изображением
+        function showModalWithImage(category, fromNetwork = false) {
+            console.log("шоу окно")
+    if (modalOpen) return; // Если модалка уже открыта, не создаём её снова
+    modalOpen = true;
+
+    let overlay = document.createElement("div");
+    overlay.classList.add("modal-overlay");
+    
+    let imageSrc;
+
+    if (category === "Любая карта") {
+        // Получаем массив ключей (категорий) без "Любая карта"
+        const categories = Object.keys(imagesCover).filter(cat => cat !== "Любая карта");
+        // Выбираем случайную категорию
+        const randomCategory = categories[Math.floor(Math.random() * categories.length)];
+        category = randomCategory;
+        // Получаем соответствующее изображение
+        imageSrc = imagesCover[randomCategory];
+    } else {
+        imageSrc = imagesCover[category];
+    }
+
+    overlay.innerHTML = `
+        <div class="modal">
+            <img src="${imageSrc}" alt="Тема: ${category}" onclick="flipImage(this, '${category}')" />
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    // Если модалку открыл игрок, отправляем команду на сервер
+    if (!fromNetwork) {
+        socket.emit("openModal", { roomId, category });
+    }
+
+    overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) {
+            closeModal();
+        }
+    });
+}
+        // Закрытие модального окна
+        function closeModal() {
+            let overlay = document.querySelector(".modal-overlay");
+            if (overlay) {
+                overlay.remove();
+                setTimeout(() => {
+                    modalOpen = false;
+                    socket.emit("closeModal", roomId);
+                }, 100);
+            }
+        }
+
+        // Обработка событий от сервера
+        socket.on("openModal", ({ category }) => {
+            showModalWithImage(category, true);
+        });
+
+        socket.on("closeModal", () => {
+            closeModal();
+        });
+
+        // Переворот изображения
+        function flipImage(imgElement, category) {
+            let newSrc;
+
+            if (imgElement.dataset.flipped === "true") {
+                newSrc = imagesCover[category];
+                imgElement.dataset.flipped = "false";
+            } else {
+                newSrc = getRandomImage(category);
+                imgElement.dataset.flipped = "true";
+            }
+
+            imgElement.src = newSrc;
+            socket.emit("flipImage", { roomId, category, newSrc, flipped: imgElement.dataset.flipped });
+        }
+
+        socket.on("flipImage", ({ category, newSrc, flipped }) => {
+            let imgElement = document.querySelector(".modal img");
+            if (imgElement) {
+                imgElement.src = newSrc;
+                imgElement.dataset.flipped = flipped;
+            }
+        });
+
+        socket.on("roomDeleted", ({ message }) => {
+        alert(message); // Покажем пользователю уведомление
+        console.log("Комната удалена, отключаемся...");
+
+        // Отключаем игрока
+        socket.disconnect();
+
+        // Перенаправляем на главную страницу
+        window.location.href = "/";
+        });
+
+
+        // Получение случайного изображения
+        function getRandomImage(category) {
+            const images = {
+    "Дорожные знаки": Array.from({ length: 38 }, (_, i) => `images/road-signs/${i + 1}.jpg`),
+    "Члены семьи": Array.from({ length: 25 }, (_, i) => `images/family/${i + 1}.jpg`),
+    "Сказочные персонажи": Array.from({ length: 29 }, (_, i) => `images/fairy-tale/${i + 1}.jpg`),
+    "Известные личности": Array.from({ length: 30 }, (_, i) => `images/famous-people/${i + 1}.jpg`),
+    "Профессии": Array.from({ length: 32 }, (_, i) => `images/professions/${i + 1}.jpg`),
+    "Персонажи из кино и литературы": Array.from({ length: 48 }, (_, i) => `images/movies-literature/${i + 1}.jpg`),
+    "Метафорические образы": Array.from({ length: 23 }, (_, i) => `images/metaphors/${i + 1}.jpg`),
+    "Цитаты известных людей": Array.from({ length: 35 }, (_, i) => `images/quotes/${i + 1}.jpg`),
+    "Цитаты из книг": Array.from({ length: 29 }, (_, i) => `images/book-quotes/${i + 1}.jpg`),
+    "Строки из песен": Array.from({ length: 24 }, (_, i) => `images/song-lyrics/${i + 1}.jpg`),
+    "Устами младенца": Array.from({ length: 18 }, (_, i) => `images/kids-sayings/${i + 1}.jpg`),
+    "Хокку": Array.from({ length: 29 }, (_, i) => `images/haiku/${i + 1}.jpg`),
+    "Проблемы": Array.from({ length: 22 }, (_, i) => `images/problems/${i + 1}.jpg`),
+    "Откат назад": Array.from({ length: 31 }, (_, i) => `images/rollback/${i + 1}.jpg`),
+    "Волшебный грааль": Array.from({ length: 91 }, (_, i) => `images/magic-grail/${i + 1}.jpg`),
+    "Вопросы психотерапевта": Array.from({ length: 51 }, (_, i) => `images/therapy-questions/${i + 1}.jpg`),
+    "Вопросы от эксперта": Array.from({ length: 41 }, (_, i) => `images/expert-questions/${i + 1}.jpg`),
+    "Подсказки": Array.from({ length: 66 }, (_, i) => `images/hints/${i + 1}.jpg`),
+    "Вопросы ребенка": Array.from({ length: 24 }, (_, i) => `images/child-questions/${i + 1}.jpg`),
+    "Провокация": Array.from({ length: 25 }, (_, i) => `images/provocation/${i + 1}.jpg`),
+    "Подсказки тексты": Array.from({ length: 39 }, (_, i) => `images/text-hints/${i + 1}.jpg`),
+    "Таблица чувств": Array.from({ length: 164 }, (_, i) => `images/feelings-table/${i + 1}.jpg`)
+};
+
+            let categoryImages = images[category] || ["images/default.jpg"];
+            return categoryImages[Math.floor(Math.random() * categoryImages.length)];
+        }
+
+        socket.on("rollDiceResult", ({ roll }) => {
+    const diceElement = document.querySelector(".dice");
+    diceElement.innerText = roll;
+});
+
+
+        // Бросок кубика
+        function rollDice() {
+    const roll = Math.floor(Math.random() * 6) + 1;
+    socket.emit("rollDice", { roomId, roll }); // Отправляем событие на сервер
+}
+
+    </script>
+</body>
+</html>
